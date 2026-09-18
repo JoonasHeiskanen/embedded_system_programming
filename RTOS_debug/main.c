@@ -1,8 +1,3 @@
-// Tavoittelen kolmea pistettä tehtävästä
-// Suoritin Sekvenssin vastaanoton sarjaportista +1p
-// Lisäksi refaktoroin ohjelmaa, jossa poistettiin superloopit ja kätin THREAD APIA +1p
-// Kolmantena lisäsin sekvenssiin toisto ominaisuuden joka toistaa uarttiin antamaani sekvenssikäskyä uudelleen +1p
-
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/device.h>
