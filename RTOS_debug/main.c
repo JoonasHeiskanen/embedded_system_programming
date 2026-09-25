@@ -1,3 +1,7 @@
+//Tavoittelen kolmea pistettä tämän viikon tehtävistä
+//Lisäsin debug taskin joka hoitaa kaikki printk tulostukset +1p
+//Lisäsin debug on/off toiminnallisuuden, jolla saa tulostukset päälle ja pois
+
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/device.h>
@@ -13,12 +17,14 @@
 
 // Thread initializations
 #define STACKSIZE 500
-#define PRIORITY 5
+#define PRIORITY 0
+#define PRIORITY_LOW 10
 
 int led_state = 0; // 0 = idle, 1 = red, 2 = yellow, 3 = green, 4 = red on, 5 = yellow on, 6 = green on
 int old_state = 0;
 int yellow_blink_state = 0;
 uint64_t total_time = 0;
+bool debug_enabled = true;
 
 // Configure buttons
 #define BUTTON_0 DT_ALIAS(sw0)
@@ -47,6 +53,8 @@ void yellow_led_task(void *, void *, void*);
 void green_led_task(void *, void *, void*);
 void dispatcher_task(void *, void *, void*);
 void uart_task(void *, void *, void*);
+void debug_task(void *, void *, void*);
+void send_to_debug(const char *, const char *, uint64_t);
 
 K_THREAD_STACK_DEFINE(red_stack, STACKSIZE);
 K_THREAD_STACK_DEFINE(yellow_stack, STACKSIZE);
@@ -58,6 +66,7 @@ static struct k_thread green_thread_data;
 
 K_THREAD_DEFINE(dis_thread,STACKSIZE,dispatcher_task,NULL,NULL,NULL,PRIORITY,0,0);
 K_THREAD_DEFINE(uart_thread,STACKSIZE,uart_task,NULL,NULL,NULL,PRIORITY,0,0);
+K_THREAD_DEFINE(debug_thread,STACKSIZE,debug_task,NULL,NULL,NULL,PRIORITY_LOW,0,0);
 
 // Led pin configurations
 static const struct gpio_dt_spec red = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
@@ -71,10 +80,25 @@ static const struct device *const uart_dev = DEVICE_DT_GET(UART_DEVICE_NODE);
 // Create dispatcher FIFO buffer
 K_FIFO_DEFINE(dispatcher_fifo);
 
+// Create FIFO buffer
+K_FIFO_DEFINE(data_fifo);
+
+// FIFO dispatcher data type
+struct data_t {
+	/*************************
+	// Add fifo_reserved below
+	*************************/
+	void *fifo_reserved;
+	char msg[32];
+	uint64_t time;
+	char task_name[20];
+};
+
 // Button interrupt pausehandler
 void button_0_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
-	printk("Button pressed\n");
+	//printk("Button pressed\n");
+	send_to_debug(NULL, "Button pressed", 0);
 	
 	if (led_state == 0){
 		// jos tila on jo pause = 0, palautetaan tallennettu tila
@@ -91,9 +115,15 @@ void button_0_handler(const struct device *dev, struct gpio_callback *cb, uint32
 // Button interrupt red led handler
 void button_1_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
-	printk("Button 2 pressed\n");
-	
-	if (led_state == 0){
+	//printk("Button 2 pressed\n");
+	send_to_debug(NULL, "Button 2 pressed", 0);
+	total_time = 0;
+	k_tid_t running_thread = NULL;
+	running_thread = k_thread_create(&red_thread_data, red_stack,
+										K_THREAD_STACK_SIZEOF(red_stack),
+										red_led_task, NULL, NULL, NULL,
+										PRIORITY, 0, K_NO_WAIT);
+	/*if (led_state == 0){
 		gpio_pin_set_dt(&red,1);
 		printk("Punainen led sytytetty\n");
 		led_state = 4; // Red led on
@@ -101,14 +131,21 @@ void button_1_handler(const struct device *dev, struct gpio_callback *cb, uint32
 		gpio_pin_set_dt(&red,0);
 		printk("Punainen led sammutettu\n");
 		led_state = 0;
-	}
+	}*/
 }
 // Button interrupt yellow led handler
 void button_2_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
-	printk("Button 3 pressed\n");
+	//printk("Button 3 pressed\n");
+	send_to_debug(NULL, "Button 3 pressed", 0);
+	total_time = 0;
+	k_tid_t running_thread = NULL;
+	running_thread = k_thread_create(&yellow_thread_data, yellow_stack,
+												K_THREAD_STACK_SIZEOF(yellow_stack),
+												yellow_led_task, NULL, NULL, NULL,
+												PRIORITY, 0, K_NO_WAIT);
 	
-	if (led_state == 0){
+	/*if (led_state == 0){
 		gpio_pin_set_dt(&red,1);
 		gpio_pin_set_dt(&green,1);
 		printk("Keltainen led sytytetty\n");
@@ -118,14 +155,22 @@ void button_2_handler(const struct device *dev, struct gpio_callback *cb, uint32
 		gpio_pin_set_dt(&green,0);
 		printk("Keltainen led sammutettu\n");
 		led_state = 0;
-	}
+	}*/
 }
 // Button interrupt green led handler
 void button_3_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
-	printk("Button 4 pressed\n");
+
+	//printk("Button 4 pressed\n");
+	send_to_debug(NULL, "Button 4 pressed", 0);
+	total_time = 0;
+	k_tid_t running_thread = NULL;
+	running_thread = k_thread_create(&green_thread_data, green_stack,
+												K_THREAD_STACK_SIZEOF(green_stack),
+												green_led_task, NULL, NULL, NULL,
+												PRIORITY, 0, K_NO_WAIT);
 	
-	if (led_state == 0){
+	/*if (led_state == 0){
 		gpio_pin_set_dt(&green,1);
 		printk("Vihrea led sytytetty\n");
 		led_state = 6; // Green led on
@@ -133,13 +178,14 @@ void button_3_handler(const struct device *dev, struct gpio_callback *cb, uint32
 		gpio_pin_set_dt(&green,0);
 		printk("Vihrea led sammutettu\n");
 		led_state = 0;
-	}
+	}*/
 }
 
 // Button interrupt yellow led blink handler
 void button_4_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
-	printk("Button 5 pressed\n");
+	//printk("Button 5 pressed\n");
+	send_to_debug(NULL, "Button 5 pressed", 0);
 	if (led_state == 0){
 		yellow_blink_state = 1;
 		led_state = 2;
@@ -152,15 +198,6 @@ void button_4_handler(const struct device *dev, struct gpio_callback *cb, uint32
 		led_state = 0;
 	}
 }
-
-// FIFO dispatcher data type
-struct data_t {
-	/*************************
-	// Add fifo_reserved below
-	*************************/
-	void *fifo_reserved;
-	char msg[20];
-};
 
 /********************
  * init UART
@@ -358,7 +395,9 @@ void uart_task(void *unused1, void *unused2, void *unused3)
 				uart_msg_cnt++;
 			// Character is newline, copy dispatcher data and put to FIFO buffer
 			} else {
-				printk("UART msg: %s\n", uart_msg);
+				char uart_buf [32];
+				snprintf(uart_buf, sizeof(uart_buf), "Uart: %s", uart_msg);
+				send_to_debug(NULL, uart_buf, 0);
                 
 				struct data_t *buf = k_malloc(sizeof(struct data_t));
 				if (buf == NULL) {
@@ -383,7 +422,7 @@ void uart_task(void *unused1, void *unused2, void *unused3)
 		}
 		k_msleep(10);
 	}
-	return 0;
+	return;
 }
 
 /********************
@@ -399,8 +438,12 @@ void dispatcher_task(void *unused1, void *unused2, void *unused3)
 		k_free(rec_item);
 		total_time = 0; // Sets total time cycle to zero
 
-		printk("Dispatcher: %s\n", sequence);
+		// Sends dispatcher sequence info to debug_task
+		char disp_msg[32];
+		snprintf(disp_msg, sizeof(disp_msg), "Dispatcher: %s", sequence);
+		send_to_debug(NULL, disp_msg, 0);
 		int cnt = 0;
+
 		// tulostetaan merkki kerrallaan
 		while (sequence[cnt] != 0) {
 			// Mahdollistetaan sekvenssin pysäytys
@@ -408,37 +451,47 @@ void dispatcher_task(void *unused1, void *unused2, void *unused3)
 			if (stop_cmd != NULL) {
     			if (stop_cmd->msg[0] == 'S') {
         			k_free(stop_cmd);
+					send_to_debug(NULL, "Sekvenssi pysaytetty", 0);
         			break;
     			}
     			k_free(stop_cmd);
-}
+			}
 			k_tid_t running_thread = NULL;
 			if (sequence[cnt] == 'R'){
-				//printk("RED sequence\n");
+				send_to_debug(NULL, "RED sequence", 0);
 				running_thread = k_thread_create(&red_thread_data, red_stack,
 												K_THREAD_STACK_SIZEOF(red_stack),
 												red_led_task, NULL, NULL, NULL,
 												PRIORITY, 0, K_NO_WAIT);
 			}
 			if (sequence[cnt] == 'Y'){
-				//printk("YELLOW sequence\n");
+				send_to_debug(NULL, "YELLOW sequence", 0);
 				running_thread = k_thread_create(&yellow_thread_data, yellow_stack,
 												K_THREAD_STACK_SIZEOF(yellow_stack),
 												yellow_led_task, NULL, NULL, NULL,
 												PRIORITY, 0, K_NO_WAIT);
 			}
 			if (sequence[cnt] == 'G'){
-				//printk("GREEN sequence\n");
+				send_to_debug(NULL, "GREEN sequence", 0);
 				running_thread = k_thread_create(&green_thread_data, green_stack,
 												K_THREAD_STACK_SIZEOF(green_stack),
 												green_led_task, NULL, NULL, NULL,
 												PRIORITY, 0, K_NO_WAIT);
 			}
 			if (sequence[cnt] == 'T'){
-					printk("Ollaan toisto sekvenssissa\n");
-					cnt = -1;
+				send_to_debug(NULL, "Ollaan toisto sekvenssissa", 0);
+				cnt = -1;
 				}
-			
+			if (sequence[cnt] == 'D'){
+				if (debug_enabled == true){
+					send_to_debug("SYS","Debug disabled", 0);
+					debug_enabled = false;
+				}
+				else{
+					debug_enabled = true;
+					send_to_debug("SYS","Debug enabled", 0);
+				}
+			}
 			cnt++;
 
 			// Odotetaan Thread API:lla että käynnistetty säie suorittaa työnsä loppuun
@@ -453,25 +506,21 @@ void dispatcher_task(void *unused1, void *unused2, void *unused3)
 void red_led_task(void *, void *, void*) {
 	timing_start();
 	timing_t red_start_time = timing_counter_get();
-
-	//printk("Red led thread started\n");
 	
 	// 1. set led on 
 	gpio_pin_set_dt(&red,1);
-	//printk("Red on\n");
+	send_to_debug(NULL, "Red on", 0);
 
 	k_sleep(K_SECONDS(1));
 		
 	gpio_pin_set_dt(&red,0);
-	//printk("Red off\n");
+	send_to_debug(NULL, "Red off", 0);
 
 	timing_t red_end_time = timing_counter_get();
 	timing_stop();
     uint64_t timing_ns = timing_cycles_to_ns(timing_cycles_get(&red_start_time, &red_end_time));
 	uint64_t timing_us = timing_ns / 1000;
-	printk("Red task time: %llu\n", timing_us);
-	total_time = total_time + timing_us;
-	printk("Total time is: %llu\n", total_time);
+	send_to_debug("Red task", NULL, timing_us);
 }
 
 // Task to handle yellow led
@@ -479,28 +528,25 @@ void yellow_led_task(void *, void *, void*) {
 	
 	timing_start();
 	timing_t yellow_start_time = timing_counter_get();
-
-	
-	//printk("Yellow led thread started\n");
 	
 	// 1. set led on 
 	gpio_pin_set_dt(&red,1);
 	gpio_pin_set_dt(&green,1);
-	//printk("Yellow on\n");
+	
+	send_to_debug(NULL, "Yellow on", 0);
 		
 	k_sleep(K_SECONDS(1));
 	
 	gpio_pin_set_dt(&red,0);
 	gpio_pin_set_dt(&green,0);
-	//printk("Yellow off\n");
+	
+	send_to_debug(NULL, "Yellow off", 0);
 
 	timing_t yellow_end_time = timing_counter_get();
 	timing_stop();
     uint64_t timing_ns = timing_cycles_to_ns(timing_cycles_get(&yellow_start_time, &yellow_end_time));
 	uint64_t timing_us = timing_ns / 1000;
-	printk("Yellow task time: %llu\n", timing_us);
-	total_time = total_time + timing_us;
-	printk("Total time is: %llu\n", total_time);
+	send_to_debug("Yellow task", NULL, timing_us);
 }
 
 // Task to handle green led
@@ -509,22 +555,66 @@ void green_led_task(void *, void *, void*) {
 	timing_start();
 	timing_t green_start_time = timing_counter_get();
 
-	//printk("Green led thread started\n");
-	
 	// 1. set led on 
 	gpio_pin_set_dt(&green,1);
-	//printk("Green on\n");
+	
+	send_to_debug(NULL, "Green on", 0);
 			
 	k_sleep(K_SECONDS(1));
 			
 	gpio_pin_set_dt(&green,0);
-	//printk("Green off\n");
+	
+	send_to_debug(NULL, "Green off", 0);
 
 	timing_t green_end_time = timing_counter_get();
 	timing_stop();
     uint64_t timing_ns = timing_cycles_to_ns(timing_cycles_get(&green_start_time, &green_end_time));
 	uint64_t timing_us = timing_ns / 1000;
-	printk("Green task time: %llu\n", timing_us);
-	total_time = total_time + timing_us;
-	printk("Total time is: %llu\n", total_time);
+
+	send_to_debug("Green task", NULL, timing_us);
+}
+
+void debug_task(void *, void *, void*) {
+
+	// Store received data
+	struct data_t *received;
+
+	while (true) {
+        received = k_fifo_get(&data_fifo, K_FOREVER);
+
+		// Jos viestissä on tunniste "SYS", se tulostetaan AINA
+        if (strcmp(received->task_name, "SYS") == 0) {
+            printk("%s\n", received->msg);
+		}
+		else if (debug_enabled){
+			if (received->time == 0) {
+				// Tilaviesti
+				printk("%s\n", received->msg);
+			} else {
+				// Ajanmittaus
+				total_time += received->time;
+				printk("%s time: %llu us | Total time: %llu us\n", 
+					received->task_name, received->time, total_time);
+			}
+		}
+		k_free(received);
+    }
+}
+
+void send_to_debug(const char *task, const char *msg, uint64_t time) {
+    struct data_t *buf = k_malloc(sizeof(struct data_t));
+    if (buf) {
+        memset(buf->task_name, 0, sizeof(buf->task_name));
+        memset(buf->msg, 0, sizeof(buf->msg));
+
+        if (task) {
+            snprintf(buf->task_name, sizeof(buf->task_name), "%s", task);
+        }
+        if (msg) {
+            snprintf(buf->msg, sizeof(buf->msg), "%s", msg);
+        }
+
+        buf->time = time;
+        k_fifo_put(&data_fifo, buf);
+    }
 }
