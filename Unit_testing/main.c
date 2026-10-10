@@ -1,7 +1,6 @@
 //Tavoittelen kolmea pistettä tehtävästä
-// Aikamerkkijono robotilta +1p
-// Tein ja suoritin testit jossa testataan sekä oikeat että virheelliset merkkijonot
-// Lisäsin ohjelmaan lisätestikeissit +1p
+// Suoritin testit ja lisäsin timeparserfunktion ohjelmaan +1p
+// Lisäsin extra testikeissejä ohjelmaani +1p
 // Tein lisäksi sekvenssi parserointifunktin jonka lisäsin pääohjelmaan ja tein sille tarvittavat testit +1p
 
 #include <zephyr/kernel.h>
