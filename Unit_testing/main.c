@@ -1,6 +1,8 @@
-//Tavoittelen kahta pistettä tehtävästä
-// Suoritin testit ja lisäsin ne parserifunktion ohjelmaan +1p
-// Lisäsin extra testikeissejä ohjelmaani +1p
+//Tavoittelen kolmea pistettä tehtävästä
+// Aikamerkkijono robotilta +1p
+// Tein ja suoritin testit jossa testataan sekä oikeat että virheelliset merkkijonot
+// Lisäsin ohjelmaan lisätestikeissit +1p
+// Tein lisäksi sekvenssi parserointifunktin jonka lisäsin pääohjelmaan ja tein sille tarvittavat testit +1p
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
@@ -14,7 +16,7 @@
 
 
 // Thread initializations
-#define STACKSIZE 500
+#define STACKSIZE 2048
 #define PRIORITY 0
 #define PRIORITY_LOW 10
 
@@ -24,11 +26,11 @@
 #define TIME_VALUE_ERROR    -3
 #define DIGIT_VALUE_ERROR	-4
 #define NULL_VALUE_ERROR	-5
+#define ZERO_TIME_ERROR		-6
+#define SEQUENCE_OK			-7
+#define SEQUENCE_ERROR		-8
 #define COMMAND_OK			 0
 
-int led_state = 0; // 0 = idle, 1 = red, 2 = yellow, 3 = green, 4 = red on, 5 = yellow on, 6 = green on
-int old_state = 0;
-int yellow_blink_state = 0;
 uint64_t total_time = 0;
 bool debug_enabled = true;
 
@@ -62,6 +64,7 @@ void uart_task(void *, void *, void*);
 void debug_task(void *, void *, void*);
 void send_to_debug(const char *, const char *, uint64_t);
 int time_parse(char *time);
+int seq_parse(char *seq);
 
 K_THREAD_STACK_DEFINE(red_stack, STACKSIZE);
 K_THREAD_STACK_DEFINE(yellow_stack, STACKSIZE);
@@ -112,17 +115,6 @@ void button_0_handler(const struct device *dev, struct gpio_callback *cb, uint32
 	//printk("Button pressed\n");
 	send_to_debug(NULL, "Button pressed", 0);
 	
-	if (led_state == 0){
-		// jos tila on jo pause = 0, palautetaan tallennettu tila
-		led_state = old_state;
-	} 	else {
-			// Otetaan nykyinen tila talteen ja siirrytään tilaan 0
-			old_state = led_state;
-			led_state = 0;
-			gpio_pin_set_dt(&red,0);
-			gpio_pin_set_dt(&green,0);
-			printk("paused\n");
-	}
 }
 // Button interrupt red led handler
 void button_1_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
@@ -135,15 +127,6 @@ void button_1_handler(const struct device *dev, struct gpio_callback *cb, uint32
 										K_THREAD_STACK_SIZEOF(red_stack),
 										red_led_task, NULL, NULL, NULL,
 										PRIORITY, 0, K_NO_WAIT);
-	/*if (led_state == 0){
-		gpio_pin_set_dt(&red,1);
-		printk("Punainen led sytytetty\n");
-		led_state = 4; // Red led on
-	}	else {
-		gpio_pin_set_dt(&red,0);
-		printk("Punainen led sammutettu\n");
-		led_state = 0;
-	}*/
 }
 // Button interrupt yellow led handler
 void button_2_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
@@ -156,18 +139,6 @@ void button_2_handler(const struct device *dev, struct gpio_callback *cb, uint32
 												K_THREAD_STACK_SIZEOF(yellow_stack),
 												yellow_led_task, NULL, NULL, NULL,
 												PRIORITY, 0, K_NO_WAIT);
-	
-	/*if (led_state == 0){
-		gpio_pin_set_dt(&red,1);
-		gpio_pin_set_dt(&green,1);
-		printk("Keltainen led sytytetty\n");
-		led_state = 5; // Yellow led on
-	}	else {
-		gpio_pin_set_dt(&red,0);
-		gpio_pin_set_dt(&green,0);
-		printk("Keltainen led sammutettu\n");
-		led_state = 0;
-	}*/
 }
 // Button interrupt green led handler
 void button_3_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
@@ -181,16 +152,6 @@ void button_3_handler(const struct device *dev, struct gpio_callback *cb, uint32
 												K_THREAD_STACK_SIZEOF(green_stack),
 												green_led_task, NULL, NULL, NULL,
 												PRIORITY, 0, K_NO_WAIT);
-	
-	/*if (led_state == 0){
-		gpio_pin_set_dt(&green,1);
-		printk("Vihrea led sytytetty\n");
-		led_state = 6; // Green led on
-	}	else {
-		gpio_pin_set_dt(&green,0);
-		printk("Vihrea led sammutettu\n");
-		led_state = 0;
-	}*/
 }
 
 // Button interrupt yellow led blink handler
@@ -198,17 +159,6 @@ void button_4_handler(const struct device *dev, struct gpio_callback *cb, uint32
 {
 	//printk("Button 5 pressed\n");
 	send_to_debug(NULL, "Button 5 pressed", 0);
-	if (led_state == 0){
-		yellow_blink_state = 1;
-		led_state = 2;
-		printk("Yellow blink tila paalla\n");
-	}	else {
-		yellow_blink_state = 0;
-		gpio_pin_set_dt(&red,0);
-		gpio_pin_set_dt(&green,0);
-		printk("Yellow blink tila sammutettu\n");
-		led_state = 0;
-	}
 }
 
 /********************
@@ -400,9 +350,9 @@ void uart_task(void *unused1, void *unused2, void *unused3)
 	while (true) {
 		// Ask UART if data available
 		if (uart_poll_in(uart_dev,&rc) == 0) {
-			// printk("Received: %c\n",rc);
+
 			// If character is not newline, add to UART message buffer
-			if (rc != '\r') {
+			if (rc != 'X') {
 				uart_msg[uart_msg_cnt] = rc;
 				uart_msg_cnt++;
 			// Character is newline, copy dispatcher data and put to FIFO buffer
@@ -411,14 +361,18 @@ void uart_task(void *unused1, void *unused2, void *unused3)
 				snprintf(uart_buf, sizeof(uart_buf), "Uart: %s", uart_msg);
 				send_to_debug(NULL, uart_buf, 0);
 
+				bool message_ok = false;
+
 				if (uart_msg[0] == '0') {
 					int ret = time_parse(uart_msg);
+
+					printk("%dX", ret);
 
 					if (ret > COMMAND_OK) {
 						// Launch timer interrupt
 						// Timer initialization
 						k_timer_init(&timer, timer_handler, NULL);
-						k_timer_start(&timer, K_SECONDS(ret), K_NO_WAIT); // start delay 1s, period 1s
+						k_timer_start(&timer, K_SECONDS(ret), K_NO_WAIT);
 					}
 					else if (ret == TIME_VALUE_ERROR) {
 						printk("Time value error\n");
@@ -434,23 +388,37 @@ void uart_task(void *unused1, void *unused2, void *unused3)
 					}
 				}
 
-				struct data_t *buf = k_malloc(sizeof(struct data_t));
-				if (buf == NULL) {
-					return;
-				}
-				// Copy UART message to dispatcher data
-				// strncpy(buf->msg, 20, uart_msg); // mitä ihmettä, miksi kaatuu!!
-				snprintf(buf->msg, 20, "%s", uart_msg);
+				// If not time interrupt, its sequence
+                else {
+                    int ret = seq_parse(uart_msg);
 
-				// You need to:
-				// Put dispatcher data to FIFO buffer
-				k_fifo_put(&dispatcher_fifo, buf);
+                    if (ret == NULL_VALUE_ERROR) {
+                        printk("String is NULL or empty\n");
+                    }
+                    else if (ret == SEQUENCE_ERROR) {
+                        printk("Wrong sequence input\n");
+                    }
+                    else {
+                        printk("Correct input\n");
+                        message_ok = true; // Seqeunce was true!
+                    }
+                }
 
+				if (message_ok) {
+					struct data_t *buf = k_malloc(sizeof(struct data_t));
+                    
+                    if (buf != NULL) {
+                        // Copy UART message to dispatcher data
+                        snprintf(buf->msg, 20, "%s", uart_msg);
+
+                        // Put dispatcher data to FIFO buffer
+                        k_fifo_put(&dispatcher_fifo, buf);
+                    } else {
+                        printk("Memory allocation failed!\n");
+                    }
+                }
+			
 				// Clear UART receive buffer
-				uart_msg_cnt = 0;
-				memset(uart_msg,0,20);
-
-				// Clear UART message buffer
 				uart_msg_cnt = 0;
 				memset(uart_msg,0,20);
 			}
@@ -459,7 +427,6 @@ void uart_task(void *unused1, void *unused2, void *unused3)
 	}
 	return;
 }
-
 /********************
  * Dispatcher task
  */
@@ -492,6 +459,7 @@ void dispatcher_task(void *unused1, void *unused2, void *unused3)
     			k_free(stop_cmd);
 			}
 			k_tid_t running_thread = NULL;
+			
 			if (sequence[cnt] == 'R'){
 				send_to_debug(NULL, "RED sequence", 0);
 				running_thread = k_thread_create(&red_thread_data, red_stack,
@@ -657,7 +625,6 @@ void send_to_debug(const char *task, const char *msg, uint64_t time) {
 
 int time_parse(char *time) {
 
-	// TODO: Check that string is not null
 	if (time == NULL) {
 		return NULL_VALUE_ERROR;
 	}
@@ -672,8 +639,7 @@ int time_parse(char *time) {
 		}
 	}
 
-	// Parse values from time string
-	// For example: 124033 -> 12hour 40min 33sec
+
     int values[3];
 	values[2] = atoi(time+4); // seconds
 	time[4] = 0;
@@ -685,8 +651,6 @@ int time_parse(char *time) {
 	// values[1] minute
 	// values[2] second
 
-
-	
 	// Hours 0-23
 	if (values[0] < 0 || values[0] > 23) {
 		return TIME_VALUE_ERROR;
@@ -699,9 +663,10 @@ int time_parse(char *time) {
 	if (values[2] < 0 || values[2] > 59) {
 		return TIME_VALUE_ERROR;
 	}
+	if (values[0] == 0 && values[1] == 0 && values[2] == 0){
+		return ZERO_TIME_ERROR;
+	}
 
-	// TODO: Calculate return value from the parsed minutes and seconds
-	// Otherwise error will be returned!
 	int seconds = (values[0] * 3600) + (values[1] * 60) + values[2];
 
 	return seconds;
@@ -711,5 +676,23 @@ int time_parse(char *time) {
 void timer_handler(struct k_timer *timer_id) {
 	
 	gpio_pin_set_dt(&red,1);
+
+}
+
+int seq_parse(char *seq) {
+
+	if (seq == NULL || strlen(seq) == 0){
+		return NULL_VALUE_ERROR;
+	}
+
+	for (int i = 0; seq[i] != '\0'; i++) {
+		char c = seq[i];
+
+		if (c != 'R' && c != 'Y' && c != 'G' && c != 'T' && c != 'D' && c!= 'S') {
+            return SEQUENCE_ERROR; 
+        }
+    }
+
+	return SEQUENCE_OK;
 
 }
